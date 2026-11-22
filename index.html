@@ -46,6 +46,7 @@
     text-shadow: 0 0 12px rgba(255, 90, 160, 0.45);
     text-wrap: balance;
     pointer-events: none;
+    transition: opacity 0.7s ease;
   }
 </style>
 </head>
@@ -86,9 +87,17 @@
     '#6fb32e', // 23 pepinillo
     '#4f8f22', // 24 pepinillo oscuro
     '#9ccf45', // 25 pepinillo claro
-    '#8fb8cc', // 26 vidrio
-    '#d4a017'  // 27 tapa dorada
+    '#b8dcef', // 26 vidrio
+    '#d4a017', // 27 tapa dorada
+    '#d9e27a', // 28 salmuera
+    '#f3e6c4', // 29 etiqueta
+    '#c8202a', // 30 etiqueta roja
+    '#4a3020', // 31 pimienta
+    '#f4efe2', // 32 ajo
+    '#9c7410', // 33 tapa oscura
+    '#4f9a3a'  // 34 eneldo
   ];
+  const GLASS = 26;
   const N_TULIP_COLORS = 14;
 
   // paletas para las flores (14 colores cada una); se cambian con un click/tap
@@ -139,7 +148,7 @@
         let p = f(u, v);
         let n = cross(sub(f(u + e, v), p), sub(f(u, v + e), p));
         if (M) { p = addv(mv(M, p), P); n = mv(M, n); }
-        pushPt(g, p, n, col);
+        pushPt(g, p, n, typeof col === 'function' ? col(u, v) : col);
       }
     }
   }
@@ -276,48 +285,101 @@
     jar = buildJar(dens);
   }
 
-  // frasco de pepinillos: vidrio ralo (se ve a través), pepinillos adentro y tapa dorada
+  // frasco de pepinillos: vidrio con reflejos en los bordes, salmuera, pepinillos con verrugas,
+  // especias, etiqueta de papel y tapa metálica
   function buildJar(dens) {
     const g = newGeo();
-    const Y0 = -1.5, Y1 = 3.4, RJ = 1.25;
+    const Y0 = -1.5, Y1 = 3.3, RJ = 1.25, YB = 2.7;   // YB: nivel de la salmuera
     let seed = 7;
     const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    const I3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+    const blob = (c, rx, ry, rz, col) => surface(g, (u, v) => {
+      const a = u * TAU, b = v * Math.PI;
+      return [rx * Math.sin(b) * Math.cos(a), ry * Math.cos(b), rz * Math.sin(b) * Math.sin(a)];
+    }, Math.ceil(TAU * Math.max(rx, rz) * dens) + 6, Math.ceil(Math.PI * ry * dens) + 4, col, null, I3, c);
 
-    // pepinillos: uno al centro y seis alrededor
-    const pick = [{ x: 0, z: 0, tx: 0.05, tz: -0.04 }];
-    for (let i = 0; i < 6; i++) { const a = i * TAU / 6 + 0.4; pick.push({ x: 0.66 * Math.cos(a), z: 0.66 * Math.sin(a), tx: 0.12 * Math.sin(a * 3), tz: -0.1 * Math.cos(a * 2) }); }
+    // pepinillos curvos, con verrugas, rayas claras y puntas oscuras
+    const pick = [{ x: 0.05, z: -0.05, a: 0.3 }];
+    for (let i = 0; i < 6; i++) { const a = i * TAU / 6 + 0.4; pick.push({ x: 0.6 * Math.cos(a), z: 0.6 * Math.sin(a), a }); }
     pick.forEach((pk, i) => {
-      const len = 3.0 + (i % 3) * 0.2, R = 0.29 + (i % 2) * 0.03;
-      const M = mul(Rx(pk.tz), Rz(pk.tx));
-      const C = [pk.x, 0.85, pk.z];
+      const len = 2.6 + (i % 3) * 0.25, R = 0.26 + (i % 2) * 0.04, bend = 0.1 + (i % 3) * 0.04;
+      const M = mul(Ry(-pk.a + Math.PI), Rz((i % 2 ? 1 : -1) * 0.06));
+      const C = [pk.x, Y0 + 0.2 + len / 2, pk.z];
       const f = (u, v) => {
-        const th = u * TAU, ph = v * Math.PI;
-        const r = R * Math.sin(ph) * (1 + 0.1 * Math.sin(9 * ph) * Math.cos(5 * th + i));
-        return [r * Math.cos(th), len / 2 * Math.cos(ph), r * Math.sin(th)];
+        const th = u * TAU, ph = v * Math.PI, yy = Math.cos(ph);
+        const wart = Math.pow(Math.max(0, Math.sin(11 * th + i) * Math.sin(15 * ph + 2 * i)), 6);
+        const r = R * Math.pow(Math.sin(ph), 0.8) * (1 + 0.045 * Math.cos(7 * th) + 0.14 * wart);
+        return [r * Math.cos(th) + bend * (1 - yy * yy), len / 2 * yy, r * Math.sin(th)];
       };
-      surface(g, f, Math.ceil(TAU * R * dens) + 6, Math.ceil(len * dens * 0.8), 23 + (i % 3), null, M, C);
+      const colF = (u, v) => (v < 0.07 || v > 0.93) ? 24 : Math.sin(u * TAU * 7 + i) > 0.55 ? 25 : Math.sin(u * TAU * 3 + v * 9) > 0.7 ? 24 : 23;
+      surface(g, f, Math.ceil(TAU * R * dens * 1.3) + 8, Math.ceil(len * dens), colF, null, M, C);
     });
 
-    // vidrio: sólo una parte de los puntos, para que se vea transparente
+    // granos de pimienta, dientes de ajo y ramitas de eneldo
+    for (let i = 0; i < 16; i++) {
+      const a = rnd() * TAU, r = 0.25 + rnd() * 0.85;
+      blob([r * Math.cos(a), Y0 + 0.12 + rnd() * 2.9, r * Math.sin(a)], 0.07, 0.07, 0.07, 31);
+    }
+    for (let i = 0; i < 3; i++) {
+      const a = i * 2.1 + 0.8, r = 0.95;
+      blob([r * Math.cos(a), Y0 + 0.35 + i * 0.95, r * Math.sin(a)], 0.13, 0.2, 0.13, 32);
+    }
+    for (let i = 0; i < 3; i++) {
+      const a = i * 2.1 + 1.9, r = 0.98, top = 2.2 + i * 0.15;
+      const A = [r * Math.cos(a), Y0 + 0.25, r * Math.sin(a)];
+      const Bc = [r * 0.9 * Math.cos(a + 0.15), (Y0 + top) / 2, r * 0.9 * Math.sin(a + 0.15)];
+      const Ct = [r * 0.85 * Math.cos(a - 0.1), top, r * 0.85 * Math.sin(a - 0.1)];
+      tube(g, A, Bc, Ct, 0.022, 34, dens);
+      for (let k = 0; k < 8; k++) {
+        const t = 0.35 + k * 0.08, it = 1 - t;
+        const p = addv(addv(sc(A, it * it), sc(Bc, 2 * it * t)), sc(Ct, t * t));
+        const side = k % 2 ? 1 : -1, d = [Math.cos(a + side * 1.4) * 0.22, 0.12, Math.sin(a + side * 1.4) * 0.22];
+        tube(g, p, addv(p, sc(d, 0.5)), addv(p, d), 0.014, 34, dens);
+      }
+    }
+
+    // superficie de la salmuera, con menisco contra el vidrio
+    surface(g, (u, v) => { const a = u * TAU, r = v * (RJ - 0.03); return [r * Math.cos(a), YB + 0.06 * Math.pow(v, 6), r * Math.sin(a)]; },
+      Math.ceil(TAU * RJ * dens), Math.ceil(RJ * dens) + 2, 28, () => rnd() < 0.16, null, null);
+
+    // vidrio denso: el render sólo dibuja los puntos de los bordes (efecto Fresnel)
     const prof = v => {
-      if (v < 0.06) return RJ * Math.sqrt(Math.max(0, v / 0.06)) * 0.98 + 0.02;
-      if (v > 0.9) return RJ - (RJ - 1.02) * Math.sin((v - 0.9) / 0.1 * Math.PI / 2);
+      if (v < 0.05) return 0.06 + (RJ - 0.06) * Math.sqrt(Math.max(0, v / 0.05));
+      if (v > 0.86) return RJ - (RJ - 1.04) * Math.sin(Math.min(1, (v - 0.86) / 0.09) * Math.PI / 2);
       return RJ;
     };
     const glass = (u, v) => { const a = u * TAU, r = prof(v); return [r * Math.cos(a), Y0 + v * (Y1 - Y0), r * Math.sin(a)]; };
-    const keepGlass = () => rnd() < 0.05;
-    surface(g, glass, Math.ceil(TAU * RJ * dens), Math.ceil((Y1 - Y0) * dens), 26, keepGlass, null, null);
-    // brillo vertical del vidrio
-    surface(g, (u, v) => glass(0.6 + u * 0.03, v), 4, Math.ceil((Y1 - Y0) * dens), 20, (u, v) => v > 0.1 && v < 0.88, null, null);
+    surface(g, glass, Math.ceil(TAU * RJ * dens * 1.2), Math.ceil((Y1 - Y0) * dens * 1.2), GLASS, null, null, null);
+    // rosca del cuello
+    for (let k = 0; k < 3; k++) {
+      surface(g, (u, v) => {
+        const a = u * TAU, b = v * TAU, R = 1.06, r = 0.025;
+        return [(R + r * Math.cos(b)) * Math.cos(a), Y1 - 0.08 - k * 0.09 + r * Math.sin(b) + a * 0.006, (R + r * Math.cos(b)) * Math.sin(a)];
+      }, Math.ceil(TAU * 1.06 * dens), 6, GLASS, null, null, null);
+    }
 
-    // tapa con estrías
-    const YL = Y1, YT = Y1 + 0.5, RL = 1.08;
+    // etiqueta de papel con bordes y banda roja
+    const LA = 2.4, L0 = 0.1, L1 = 1.7, RLb = RJ + 0.015;
+    surface(g, (u, v) => { const a = -LA / 2 + u * LA; return [RLb * Math.cos(a), L0 + v * (L1 - L0), RLb * Math.sin(a)]; },
+      Math.ceil(LA * RJ * dens * 1.2), Math.ceil((L1 - L0) * dens * 1.2),
+      (u, v) => (v < 0.08 || v > 0.92) ? 30 : (v > 0.4 && v < 0.6 && u > 0.12 && u < 0.88) ? (Math.sin(u * 60) > 0.2 && v > 0.45 && v < 0.55 ? 29 : 30) : 29,
+      null, null, null);
+
+    // tapa metálica: costado estriado, borde redondeado y arandela marcada arriba
+    const YL = Y1 - 0.05, YT = Y1 + 0.42, RL = 1.12;
     surface(g, (u, v) => {
-      const a = u * TAU, r = RL * (1 + 0.025 * Math.sign(Math.sin(a * 48)));
+      const a = u * TAU, r = RL * (1 + 0.02 * Math.sign(Math.sin(a * 56)));
       return [r * Math.cos(a), YL + v * (YT - YL), r * Math.sin(a)];
-    }, Math.ceil(TAU * RL * dens), Math.ceil(0.5 * dens) + 2, 27, null, null, null);
-    surface(g, (u, v) => { const a = u * TAU, r = v * RL * 1.02; return [r * Math.cos(a), YT + 0.04 * (1 - v * v), r * Math.sin(a)]; },
-      Math.ceil(TAU * RL * dens), Math.ceil(RL * dens) + 2, 27, null, null, null);
+    }, Math.ceil(TAU * RL * dens * 1.2), Math.ceil(0.5 * dens) + 2, (u, v) => v < 0.12 ? 33 : 27, null, null, null);
+    surface(g, (u, v) => {
+      const a = u * TAU, b = v * Math.PI / 2, R = RL - 0.06, r = 0.06;
+      return [(R + r * Math.cos(b)) * Math.cos(a), YT + r * Math.sin(b) - 0.02, (R + r * Math.cos(b)) * Math.sin(a)];
+    }, Math.ceil(TAU * RL * dens), 6, 27, null, null, null);
+    surface(g, (u, v) => {
+      const a = u * TAU, r = v * (RL - 0.06);
+      const emb = (r > 0.72 && r < 0.8) ? 0.035 : 0;
+      return [r * Math.cos(a), YT + 0.04 + 0.03 * (1 - v * v) + emb, r * Math.sin(a)];
+    }, Math.ceil(TAU * RL * dens), Math.ceil(RL * dens) + 2, (u, v) => { const r = v * (RL - 0.06); return (r > 0.7 && r < 0.82) ? 33 : 27; }, null, null, null);
     return freeze(g);
   }
 
@@ -366,15 +428,25 @@
       if (sy < 0 || sy >= H) continue;
       const idx = sy * W + sx;
       if (ooz <= zbuf[idx]) continue;
-      zbuf[idx] = ooz;
+      const cq = colOv >= 0 ? colOv : C[q];
       let nx = m0 * N[j] + m1 * N[j + 1] + m2 * N[j + 2];
       let ny = m3 * N[j] + m4 * N[j + 1] + m5 * N[j + 2];
       let nz = m6 * N[j] + m7 * N[j + 1] + m8 * N[j + 2];
-      if (nx * X + ny * Y + nz * zz > 0) { nx = -nx; ny = -ny; nz = -nz; }   // dos caras
+      const vdot = nx * X + ny * Y + nz * zz;
+      let rim = -1;
+      if (cq === GLASS) {
+        // vidrio: casi invisible de frente, brillante en los bordes
+        rim = 1 - Math.abs(vdot) / Math.hypot(X, Y, zz);
+        const keep = 0.02 + 0.95 * rim * rim * rim * rim;
+        if (((q * 2654435761) >>> 0) / 4294967296 >= keep) continue;
+      }
+      zbuf[idx] = ooz;
+      if (vdot > 0) { nx = -nx; ny = -ny; nz = -nz; }   // dos caras
       let L = nx * LX + ny * LY + nz * LZ;
       L = 0.3 + 0.7 * Math.pow(L > 0 ? L : 0, 0.7);
+      if (rim >= 0) L = Math.max(L, 0.35 + 0.65 * rim);
       let gi = (L * NR) | 0; if (gi >= NR) gi = NR - 1;
-      gbuf[idx] = gi + NR * (colOv >= 0 ? colOv : C[q]);
+      gbuf[idx] = gi + NR * cq;
     }
   }
 
@@ -442,6 +514,12 @@
     dragTilt = Math.max(-0.6, Math.min(0.5, dragTilt + dy * 0.004));
     lx = e.clientX; ly = e.clientY;
   });
+  const msg = document.getElementById('msg');
+  function swapMessage() {
+    msg.style.opacity = '0';
+    setTimeout(() => { msg.textContent = 'Un pequeño frasco de pepinillos. Te amo papita.'; msg.style.opacity = '1'; }, 800);
+  }
+
   // secreto: 12 clicks seguidos en la esquina superior izquierda
   let cornerCount = 0, cornerLast = 0;
   function handleTap(e) {
@@ -451,7 +529,7 @@
       const now = performance.now();
       cornerCount = now - cornerLast < 1500 ? cornerCount + 1 : 1;
       cornerLast = now;
-      if (cornerCount >= 12) morphT = clock;
+      if (cornerCount >= 12) { morphT = clock; swapMessage(); }
       return;
     }
     cornerCount = 0;
