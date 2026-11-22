@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ramo de Tulipanes</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* Una sola pantalla negra: un render 3D real (z-buffer + luz) donde cada "pixel" es un caracter ASCII */
+  :root {
+    --bg: #000;
+    --fg: #d8f5d0;
+    color-scheme: dark;
+  }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    margin: 0;
+    overflow: hidden;
+    padding-block: 0;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  #stage {
+    position: relative;
+    width: 100%; height: 100%;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  #cv { display: block; touch-action: none; cursor: grab; }
+  #cv:active { cursor: grabbing; }
+  #msg {
+    position: absolute;
+    left: 0; right: 0;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 4vh);
+    margin: 0;
+    padding-inline: 8px;
+    text-align: center;
+    font-family: Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", "Courier New", monospace;
+    font-weight: 700;
+    font-size: clamp(14px, 3.6vw, 22px);
+    line-height: 1.5;
+    letter-spacing: 0.02em;
+    color: #ffc2dc;
+    text-shadow: 0 0 12px rgba(255, 90, 160, 0.45);
+    text-wrap: balance;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <canvas id="cv" role="img" aria-label="Ramo de tulipanes de todos los colores dibujado en 3D con miles de caracteres ASCII, flotando y girando sobre fondo negro. Tocá para cambiar los colores de las flores o arrastrá para girarlo."></canvas>
+  <p id="msg">Un pequeño ramo de tulipanes. Te amo pipo.</p>
+</div>
+
+<script>
+(function () {
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  const stage = document.getElementById('stage');
+  const reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const SPEED = reduce ? 0.25 : 1;
+  const TAU = Math.PI * 2;
+  const FONT = 'Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", "Courier New", monospace';
+  const RAMP = '.,-~:;=!*#$@';           // de oscuro a brillante
+  const NR = RAMP.length;
+  const CAM = 14;                        // distancia de cámara
+  const YC = 1.3;                        // centro vertical del ramo
+  const HS = 1.25;                       // tamaño de las cabezas de tulipán
+
+  const COLORS = [
+    '#e8203a', '#ff6fae', '#ff8a1f', '#ffd21f', '#a066ff', '#e040d0', '#ff6b5a',
+    '#fff2dc', '#9d8cff', '#ffb38a', '#ff2d8a', '#5cc8ff', '#c4001c', '#ffa0d0', // 0-13 tulipanes
+    '#35a845', // 14 tallo
+    '#5fd35a', // 15 hoja
+    '#ff7fbf', // 16 moño
+    '#ff2a4a', // 17 corazón rojo
+    '#ff8fc8', // 18 corazón rosa
+    '#ffd84a', // 19 estrella dorada
+    '#ffffff', // 20 estrella blanca
+    '#a8dcff', // 21 estrella celeste
+    '#ffc4e8'  // 22 estrella rosada
+  ];
+  const N_TULIP_COLORS = 14;
+
+  // paletas para las flores (14 colores cada una); se cambian con un click/tap
+  const PALETTES = [
+    COLORS.slice(0, N_TULIP_COLORS), // arcoíris
+    ['#ff2d55', '#ff6f91', '#c9184a', '#ff8fab', '#e8203a', '#ffb3c6', '#a4133c', '#ff4d6d', '#ffccd5', '#d6336c', '#ff5c8a', '#f06292', '#b5003a', '#ff99b5'], // rosas y rojos
+    ['#ff7b00', '#ffb700', '#ff5400', '#ffd000', '#ff9e00', '#ff6d3a', '#ffea00', '#ff8800', '#ffc300', '#f25c54', '#ffaa00', '#ff4800', '#ffdd55', '#f7a072'], // atardecer
+    ['#ffc8dd', '#bde0fe', '#cdb4db', '#ffafcc', '#a2d2ff', '#fde4a4', '#caffbf', '#ffd6a5', '#d0bfff', '#ffadad', '#9bf6ff', '#fdffb6', '#f1c0e8', '#b9fbc0'], // pastel
+    ['#7b2cbf', '#9d4edd', '#c77dff', '#5a189a', '#e0aaff', '#3c78d8', '#4ea8de', '#6930c3', '#b5179e', '#8ecae6', '#7209b7', '#a06cd5', '#48bfe3', '#d0a8ff'], // violetas y azules
+    ['#fff8e7', '#ffe066', '#ffffff', '#ffd23f', '#fff1b8', '#f9f9f9', '#ffec99', '#fcd34d', '#fffdf0', '#ffe4a0', '#ffffff', '#fbbf24', '#fff6d5', '#ffeaa0']  // blancos y amarillos
+  ];
+  let paletteIdx = 0, atlasFs = 8;
+
+  // luz desde arriba a la izquierda, del lado de la cámara
+  let LX = -0.45, LY = 0.75, LZ = -0.5;
+  { const l = Math.hypot(LX, LY, LZ); LX /= l; LY /= l; LZ /= l; }
+
+  // ---------- matrices 3x3 ----------
+  function Rx(a) { const c = Math.cos(a), s = Math.sin(a); return [1, 0, 0, 0, c, -s, 0, s, c]; }
+  function Ry(a) { const c = Math.cos(a), s = Math.sin(a); return [c, 0, s, 0, 1, 0, -s, 0, c]; }
+  function Rz(a) { const c = Math.cos(a), s = Math.sin(a); return [c, -s, 0, s, c, 0, 0, 0, 1]; }
+  function mul(A, B) {
+    const R = new Array(9);
+    for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++)
+      R[r * 3 + c] = A[r * 3] * B[c] + A[r * 3 + 1] * B[3 + c] + A[r * 3 + 2] * B[6 + c];
+    return R;
+  }
+  function mv(M, v) { return [M[0] * v[0] + M[1] * v[1] + M[2] * v[2], M[3] * v[0] + M[4] * v[1] + M[5] * v[2], M[6] * v[0] + M[7] * v[1] + M[8] * v[2]]; }
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const addv = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+  const sc = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const norm = a => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
+  // ---------- geometría como nube de puntos con normales ----------
+  function newGeo() { return { p: [], n: [], c: [] }; }
+  function pushPt(g, p, n, c) { n = norm(n); g.p.push(p[0], p[1], p[2]); g.n.push(n[0], n[1], n[2]); g.c.push(c); }
+  function freeze(g) { return { p: new Float32Array(g.p), n: new Float32Array(g.n), c: new Uint8Array(g.c) }; }
+
+  function surface(g, f, nu, nv, col, keep, M, P) {
+    const e = 1e-3;
+    for (let i = 0; i < nu; i++) {
+      const u = i / nu;
+      for (let j = 0; j <= nv; j++) {
+        const v = j / nv;
+        if (keep && !keep(u, v)) continue;
+        let p = f(u, v);
+        let n = cross(sub(f(u + e, v), p), sub(f(u, v + e), p));
+        if (M) { p = addv(mv(M, p), P); n = mv(M, n); }
+        pushPt(g, p, n, col);
+      }
+    }
+  }
+
+  function tube(g, A, B, C, rad, col, dens) {
+    const ns = Math.ceil((dist(A, B) + dist(B, C)) * dens);
+    const nk = 5;
+    for (let s = 0; s <= ns; s++) {
+      const t = s / ns, it = 1 - t;
+      const p = addv(addv(sc(A, it * it), sc(B, 2 * it * t)), sc(C, t * t));
+      const T = norm(addv(sc(sub(B, A), 2 * it), sc(sub(C, B), 2 * t)));
+      const ref = Math.abs(T[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+      const N = norm(cross(T, ref)), Bv = cross(T, N);
+      for (let k = 0; k < nk; k++) {
+        const ph = k / nk * TAU;
+        const nr = addv(sc(N, Math.cos(ph)), sc(Bv, Math.sin(ph)));
+        pushPt(g, addv(p, sc(nr, rad)), nr, col);
+      }
+    }
+  }
+
+  // cabeza de tulipán: copa con dos capas de 3 pétalos puntiagudos
+  function headFn(layer) {
+    const k = layer ? 0.86 : 1, ph = layer ? Math.PI / 3 : 0;
+    return (u, v) => {
+      const a = u * TAU;
+      let r;
+      if (v < 0.5) r = 0.45 * Math.sqrt(Math.max(0, Math.sin(Math.PI * 0.5 * v / 0.5)));
+      else { const q = (v - 0.5) / 0.5; r = 0.45 - 0.09 * q * q + 0.05 * q * q * q; }
+      r *= k * (1 + 0.07 * Math.cos(6 * (a + ph)) * v) * HS;
+      return [r * Math.cos(a), v * 1.15 * HS, r * Math.sin(a)];
+    };
+  }
+  function headKeep(layer) {
+    const ph = layer ? Math.PI / 3 : 0;
+    return (u, v) => v <= 0.7 + 0.3 * Math.pow(Math.abs(Math.cos(1.5 * (u * TAU + ph))), 3);
+  }
+
+  // corazón inflado (dos caras)
+  function heartFn(sgn) {
+    return (u, v) => {
+      const t = u * TAU, s = 0.022;
+      const hx = 16 * Math.pow(Math.sin(t), 3);
+      const hy = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+      return [v * hx * s, v * hy * s + 0.04, sgn * 0.16 * Math.sqrt(Math.max(0, 1 - v * v))];
+    };
+  }
+  // estrella de 5 puntas inflada
+  function starFn(sgn) {
+    return (u, v) => {
+      const a = u * TAU, seg = TAU / 5;
+      const f = (a % seg) / seg;
+      const Ro = 0.42, Ri = 0.18;
+      const r = f < 0.5 ? Ro + (Ri - Ro) * f * 2 : Ri + (Ro - Ri) * (f - 0.5) * 2;
+      const aa = a + Math.PI / 2;
+      return [v * r * Math.cos(aa), v * r * Math.sin(aa), sgn * 0.12 * (1 - v)];
+    };
+  }
+
+  // ---------- estado de pantalla ----------
+  let dpr = 1, gw = 6, gh = 10, W = 10, H = 10, cxp = 0, cyp = 0, scale = 50;
+  let zbuf, gbuf, atlas, bouquet, heartMesh, starMesh, stars = [];
+
+  function hexRgb(h) { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+
+  function buildAtlas(fsDev) {
+    atlas = document.createElement('canvas');
+    atlas.width = NR * gw;
+    atlas.height = COLORS.length * gh;
+    const a = atlas.getContext('2d');
+    a.font = `700 ${fsDev}px ${FONT}`;
+    a.textAlign = 'center';
+    a.textBaseline = 'middle';
+    COLORS.forEach((hex, ci) => {
+      const [r, g, b] = hexRgb(hex);
+      for (let i = 0; i < NR; i++) {
+        const k = 0.5 + 0.5 * i / (NR - 1);
+        let R = r * k, G = g * k, B = b * k;
+        if (i >= NR - 2) { const w = (i - (NR - 3)) * 0.16; R += (255 - R) * w; G += (255 - G) * w; B += (255 - B) * w; }
+        a.fillStyle = `rgb(${R | 0},${G | 0},${B | 0})`;
+        a.fillText(RAMP[i], i * gw + gw / 2, ci * gh + gh / 2);
+      }
+    });
+  }
+
+  function buildGeometry() {
+    const dens = scale / Math.min(gw, gh) * 1.35;   // puntos por unidad, para no dejar huecos
+    const g = newGeo();
+
+    const heads = [{ a: 0, r: 0, y: 3.2, tilt: 0 }];
+    for (let i = 0; i < 5; i++) heads.push({ a: i * TAU / 5 + 0.3, r: 1.05, y: 2.85, tilt: 0.32 });
+    for (let i = 0; i < 8; i++) heads.push({ a: i * TAU / 8, r: 1.85, y: 2.2, tilt: 0.7 });
+
+    const nu = Math.ceil(2.9 * HS * dens), nv = Math.ceil(1.35 * HS * dens);
+    heads.forEach((hd, i) => {
+      const col = i % N_TULIP_COLORS;
+      const P = [hd.r * Math.cos(hd.a), hd.y, hd.r * Math.sin(hd.a)];
+      const M = mul(Ry(-hd.a), Rz(-hd.tilt));
+      const d = mv(M, [0, 1, 0]);
+      for (let layer = 0; layer < 2; layer++) surface(g, headFn(layer), nu, nv, col, headKeep(layer), M, P);
+      const Gi = [0.07 * Math.cos(hd.a + i), 0, 0.07 * Math.sin(hd.a + i)];
+      tube(g, sub(P, sc(d, 0.03)), sub(P, sc(d, 0.95)), Gi, 0.045, 14, dens);
+      const bot = [0.3 * Math.cos(hd.a + i * 0.9), -2.0, 0.3 * Math.sin(hd.a + i * 0.9)];
+      tube(g, Gi, sc(addv(Gi, bot), 0.5), bot, 0.045, 14, dens);
+    });
+
+    // hojas largas que salen del atado
+    for (let i = 0; i < 4; i++) {
+      const b = 0.5 + i * TAU / 4;
+      const R = [Math.cos(b), 0, Math.sin(b)], A = [-Math.sin(b), 0, Math.cos(b)];
+      const leaf = (u, v) => {
+        const s = u, q = v * 2 - 1;
+        const c = addv(sc(R, 0.1 + 1.25 * Math.pow(s, 1.3)), [0, -0.7 + 2.2 * s - 0.5 * s * s, 0]);
+        const w = 0.22 * Math.pow(Math.sin(Math.PI * Math.min(1, s * 1.05)), 0.8);
+        return addv(addv(c, sc(A, w * q)), sc(R, -0.08 * q * q));
+      };
+      surface(g, leaf, Math.ceil(2.8 * dens), Math.ceil(0.5 * dens) + 2, 15, null, null, null);
+    }
+
+    // moño: anillo + dos lazos
+    surface(g, (u, v) => {
+      const a = u * TAU, b = v * TAU, R = 0.21, r = 0.07;
+      return [(R + r * Math.cos(b)) * Math.cos(a), r * Math.sin(b) + 0.02, (R + r * Math.cos(b)) * Math.sin(a)];
+    }, Math.ceil(1.5 * dens), Math.ceil(0.5 * dens) + 4, 16, null, null, null);
+    for (const sx of [-1, 1]) {
+      surface(g, (u, v) => {
+        const a = u * TAU, b = v * TAU, R = 0.2, r = 0.045;
+        const x = (R + r * Math.cos(b)) * Math.cos(a), y = (R + r * Math.cos(b)) * Math.sin(a) * 0.65;
+        return [sx * (0.36 + x), y + 0.06, r * Math.sin(b) - 0.24];
+      }, Math.ceil(1.4 * dens), Math.ceil(0.35 * dens) + 4, 16, null, null, null);
+    }
+    bouquet = freeze(g);
+  }
+
+  function layout() {
+    dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = stage.clientWidth || window.innerWidth, h = stage.clientHeight || window.innerHeight;
+    const fs = Math.max(5, Math.min(9, w / 170));
+    const fsDev = fs * dpr;
+    ctx.font = `700 ${fsDev}px ${FONT}`;
+    gw = Math.max(2, Math.round(ctx.measureText('M').width));
+    gh = Math.max(3, Math.round(fsDev * 1.12));
+    W = Math.max(20, Math.floor(w * dpr / gw));
+    H = Math.max(20, Math.floor(h * dpr / gh));
+    cv.width = W * gw; cv.height = H * gh;
+    cv.style.width = (W * gw / dpr) + 'px';
+    cv.style.height = (H * gh / dpr) + 'px';
+    cxp = cv.width / 2; cyp = cv.height * 0.44;   // un poco más arriba para dejar lugar al texto
+    scale = Math.min(cv.height * 0.76 / 7.0, cv.width * 0.92 / 5.2);
+    zbuf = new Float32Array(W * H);
+    gbuf = new Uint16Array(W * H);
+    atlasFs = fsDev;
+    buildAtlas(fsDev);
+    buildGeometry();
+    stars = [];
+    const n = Math.floor(W * H / 70);
+    for (let i = 0; i < n; i++) stars.push({ i: ((Math.random() * H) | 0) * W + ((Math.random() * W) | 0), ph: Math.random() * TAU, sp: 1 + Math.random() * 3, c: 20 + (i % 3 === 0 ? 1 : i % 5 === 0 ? 2 : i % 7 === 0 ? -1 : 0) });
+  }
+
+  // ---------- render ----------
+  function splat(g, M, pre, post, colOv) {
+    const P = g.p, N = g.n, C = g.c, n = C.length;
+    const m0 = M[0], m1 = M[1], m2 = M[2], m3 = M[3], m4 = M[4], m5 = M[5], m6 = M[6], m7 = M[7], m8 = M[8];
+    const k = CAM * scale;
+    for (let q = 0, j = 0; q < n; q++, j += 3) {
+      const x = P[j] - pre[0], y = P[j + 1] - pre[1], z = P[j + 2] - pre[2];
+      const X = m0 * x + m1 * y + m2 * z + post[0];
+      const Y = m3 * x + m4 * y + m5 * z + post[1];
+      const Z = m6 * x + m7 * y + m8 * z + post[2];
+      const zz = Z + CAM;
+      if (zz < 0.5) continue;
+      const ooz = 1 / zz;
+      const sx = ((cxp + X * k * ooz) / gw) | 0;
+      if (sx < 0 || sx >= W) continue;
+      const sy = ((cyp - Y * k * ooz) / gh) | 0;
+      if (sy < 0 || sy >= H) continue;
+      const idx = sy * W + sx;
+      if (ooz <= zbuf[idx]) continue;
+      zbuf[idx] = ooz;
+      let nx = m0 * N[j] + m1 * N[j + 1] + m2 * N[j + 2];
+      let ny = m3 * N[j] + m4 * N[j + 1] + m5 * N[j + 2];
+      let nz = m6 * N[j] + m7 * N[j + 1] + m8 * N[j + 2];
+      if (nx * X + ny * Y + nz * zz > 0) { nx = -nx; ny = -ny; nz = -nz; }   // dos caras
+      let L = nx * LX + ny * LY + nz * LZ;
+      L = 0.3 + 0.7 * Math.pow(L > 0 ? L : 0, 0.7);
+      let gi = (L * NR) | 0; if (gi >= NR) gi = NR - 1;
+      gbuf[idx] = gi + NR * (colOv >= 0 ? colOv : C[q]);
+    }
+  }
+
+  const ORBIT = [
+    { m: 'h', c: 17 }, { m: 's', c: 19 }, { m: 'h', c: 18 }, { m: 's', c: 20 }, { m: 'h', c: 17 },
+    { m: 's', c: 22 }, { m: 'h', c: 18 }, { m: 's', c: 19 }, { m: 'h', c: 17 }, { m: 's', c: 21 }
+  ];
+
+  let dragRot = 0, dragTilt = 0;
+
+  function frame(t) {
+    zbuf.fill(0);
+    const rot = t * 0.45 + dragRot;
+    const tilt = -0.32 + dragTilt;
+    const TX = Rx(tilt);
+    const fy = 0.15 * Math.sin(t * 0.9);
+    const Mb = mul(mul(TX, Rz(0.04 * Math.sin(t * 0.7))), Ry(rot));
+    splat(bouquet, Mb, [0, YC, 0], [0, fy, 0], -1);
+
+    // estrellitas de fondo que titilan
+    for (const s of stars) {
+      if (zbuf[s.i] !== 0) continue;
+      const v = Math.sin(t * s.sp + s.ph);
+      if (v < 0.25) continue;
+      zbuf[s.i] = 1e-9;
+      gbuf[s.i] = Math.min(NR - 1, ((v - 0.25) / 0.75 * 9) | 0) + NR * s.c;
+    }
+
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    for (let y = 0, idx = 0; y < H; y++) {
+      const dy = y * gh;
+      for (let x = 0; x < W; x++, idx++) {
+        if (zbuf[idx] === 0) continue;
+        const g = gbuf[idx];
+        const gx = g % NR, gc = (g - gx) / NR;
+        ctx.drawImage(atlas, gx * gw, gc * gh, gw, gh, x * gw, dy, gw, gh);
+      }
+    }
+  }
+
+  // ---------- tap = cambiar paleta, arrastrar = girar ----------
+  function nextPalette() {
+    paletteIdx = (paletteIdx + 1) % PALETTES.length;
+    for (let i = 0; i < N_TULIP_COLORS; i++) COLORS[i] = PALETTES[paletteIdx][i];
+    buildAtlas(atlasFs);
+  }
+
+  let dragging = false, lx = 0, ly = 0, moved = 0;
+  cv.addEventListener('pointerdown', e => { dragging = true; moved = 0; lx = e.clientX; ly = e.clientY; try { cv.setPointerCapture(e.pointerId); } catch (_) {} });
+  cv.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    const dx = e.clientX - lx, dy = e.clientY - ly;
+    moved += Math.abs(dx) + Math.abs(dy);
+    dragRot += dx * 0.01;
+    dragTilt = Math.max(-0.6, Math.min(0.5, dragTilt + dy * 0.004));
+    lx = e.clientX; ly = e.clientY;
+  });
+  cv.addEventListener('pointerup', () => { if (dragging && moved < 8) nextPalette(); dragging = false; });
+  cv.addEventListener('pointercancel', () => { dragging = false; });
+
+  // ---------- loop ----------
+  let last = 0, clock = 0;
+  function loop(ms) {
+    requestAnimationFrame(loop);
+    const dt = last ? Math.min(0.1, (ms - last) / 1000) : 0;
+    last = ms;
+    clock += dt * SPEED;
+    frame(clock);
+  }
+
+  let rt, lastSize = '';
+  function relayout() {
+    const size = stage.clientWidth + 'x' + stage.clientHeight + '@' + (window.devicePixelRatio || 1);
+    if (size === lastSize) return;
+    lastSize = size;
+    clearTimeout(rt);
+    rt = setTimeout(() => { layout(); frame(clock); }, 80);
+  }
+  window.addEventListener('resize', relayout);
+  if (window.ResizeObserver) new ResizeObserver(relayout).observe(stage);
+
+  layout();
+  lastSize = stage.clientWidth + 'x' + stage.clientHeight + '@' + (window.devicePixelRatio || 1);
+  frame(0);
+  requestAnimationFrame(loop);
+})();
+</script>
+
+</body>
+</html>
