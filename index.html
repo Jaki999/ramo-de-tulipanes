@@ -83,10 +83,10 @@
     '#ffffff', // 20 estrella blanca
     '#a8dcff', // 21 estrella celeste
     '#ffc4e8', // 22 estrella rosada
-    '#5a8f29', // 23 pepinillo
-    '#3f6e1f', // 24 pepinillo oscuro
-    '#86b53c', // 25 pepinillo claro
-    '#d6f0ff', // 26 vidrio
+    '#6fb32e', // 23 pepinillo
+    '#4f8f22', // 24 pepinillo oscuro
+    '#9ccf45', // 25 pepinillo claro
+    '#8fb8cc', // 26 vidrio
     '#d4a017'  // 27 tapa dorada
   ];
   const N_TULIP_COLORS = 14;
@@ -305,7 +305,7 @@
       return RJ;
     };
     const glass = (u, v) => { const a = u * TAU, r = prof(v); return [r * Math.cos(a), Y0 + v * (Y1 - Y0), r * Math.sin(a)]; };
-    const keepGlass = () => rnd() < 0.2;
+    const keepGlass = () => rnd() < 0.05;
     surface(g, glass, Math.ceil(TAU * RJ * dens), Math.ceil((Y1 - Y0) * dens), 26, keepGlass, null, null);
     // brillo vertical del vidrio
     surface(g, (u, v) => glass(0.6 + u * 0.03, v), 4, Math.ceil((Y1 - Y0) * dens), 20, (u, v) => v > 0.1 && v < 0.88, null, null);
