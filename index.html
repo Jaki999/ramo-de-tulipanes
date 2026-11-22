@@ -82,7 +82,12 @@
     '#ffd84a', // 19 estrella dorada
     '#ffffff', // 20 estrella blanca
     '#a8dcff', // 21 estrella celeste
-    '#ffc4e8'  // 22 estrella rosada
+    '#ffc4e8', // 22 estrella rosada
+    '#5a8f29', // 23 pepinillo
+    '#3f6e1f', // 24 pepinillo oscuro
+    '#86b53c', // 25 pepinillo claro
+    '#d6f0ff', // 26 vidrio
+    '#d4a017'  // 27 tapa dorada
   ];
   const N_TULIP_COLORS = 14;
 
@@ -196,7 +201,8 @@
 
   // ---------- estado de pantalla ----------
   let dpr = 1, gw = 6, gh = 10, W = 10, H = 10, cxp = 0, cyp = 0, scale = 50;
-  let zbuf, gbuf, atlas, bouquet, heartMesh, starMesh, stars = [];
+  let zbuf, gbuf, atlas, bouquet, jar, stars = [];
+  let morphT = -1;   // momento en que empezó la transformación en frasco
 
   function hexRgb(h) { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
 
@@ -267,6 +273,52 @@
       }, Math.ceil(1.4 * dens), Math.ceil(0.35 * dens) + 4, 16, null, null, null);
     }
     bouquet = freeze(g);
+    jar = buildJar(dens);
+  }
+
+  // frasco de pepinillos: vidrio ralo (se ve a través), pepinillos adentro y tapa dorada
+  function buildJar(dens) {
+    const g = newGeo();
+    const Y0 = -1.5, Y1 = 3.4, RJ = 1.25;
+    let seed = 7;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+
+    // pepinillos: uno al centro y seis alrededor
+    const pick = [{ x: 0, z: 0, tx: 0.05, tz: -0.04 }];
+    for (let i = 0; i < 6; i++) { const a = i * TAU / 6 + 0.4; pick.push({ x: 0.66 * Math.cos(a), z: 0.66 * Math.sin(a), tx: 0.12 * Math.sin(a * 3), tz: -0.1 * Math.cos(a * 2) }); }
+    pick.forEach((pk, i) => {
+      const len = 3.0 + (i % 3) * 0.2, R = 0.29 + (i % 2) * 0.03;
+      const M = mul(Rx(pk.tz), Rz(pk.tx));
+      const C = [pk.x, 0.85, pk.z];
+      const f = (u, v) => {
+        const th = u * TAU, ph = v * Math.PI;
+        const r = R * Math.sin(ph) * (1 + 0.1 * Math.sin(9 * ph) * Math.cos(5 * th + i));
+        return [r * Math.cos(th), len / 2 * Math.cos(ph), r * Math.sin(th)];
+      };
+      surface(g, f, Math.ceil(TAU * R * dens) + 6, Math.ceil(len * dens * 0.8), 23 + (i % 3), null, M, C);
+    });
+
+    // vidrio: sólo una parte de los puntos, para que se vea transparente
+    const prof = v => {
+      if (v < 0.06) return RJ * Math.sqrt(Math.max(0, v / 0.06)) * 0.98 + 0.02;
+      if (v > 0.9) return RJ - (RJ - 1.02) * Math.sin((v - 0.9) / 0.1 * Math.PI / 2);
+      return RJ;
+    };
+    const glass = (u, v) => { const a = u * TAU, r = prof(v); return [r * Math.cos(a), Y0 + v * (Y1 - Y0), r * Math.sin(a)]; };
+    const keepGlass = () => rnd() < 0.2;
+    surface(g, glass, Math.ceil(TAU * RJ * dens), Math.ceil((Y1 - Y0) * dens), 26, keepGlass, null, null);
+    // brillo vertical del vidrio
+    surface(g, (u, v) => glass(0.6 + u * 0.03, v), 4, Math.ceil((Y1 - Y0) * dens), 20, (u, v) => v > 0.1 && v < 0.88, null, null);
+
+    // tapa con estrías
+    const YL = Y1, YT = Y1 + 0.5, RL = 1.08;
+    surface(g, (u, v) => {
+      const a = u * TAU, r = RL * (1 + 0.025 * Math.sign(Math.sin(a * 48)));
+      return [r * Math.cos(a), YL + v * (YT - YL), r * Math.sin(a)];
+    }, Math.ceil(TAU * RL * dens), Math.ceil(0.5 * dens) + 2, 27, null, null, null);
+    surface(g, (u, v) => { const a = u * TAU, r = v * RL * 1.02; return [r * Math.cos(a), YT + 0.04 * (1 - v * v), r * Math.sin(a)]; },
+      Math.ceil(TAU * RL * dens), Math.ceil(RL * dens) + 2, 27, null, null, null);
+    return freeze(g);
   }
 
   function layout() {
@@ -295,12 +347,13 @@
   }
 
   // ---------- render ----------
-  function splat(g, M, pre, post, colOv) {
+  function splat(g, M, pre, post, colOv, ks) {
     const P = g.p, N = g.n, C = g.c, n = C.length;
     const m0 = M[0], m1 = M[1], m2 = M[2], m3 = M[3], m4 = M[4], m5 = M[5], m6 = M[6], m7 = M[7], m8 = M[8];
     const k = CAM * scale;
+    if (ks === undefined) ks = 1;
     for (let q = 0, j = 0; q < n; q++, j += 3) {
-      const x = P[j] - pre[0], y = P[j + 1] - pre[1], z = P[j + 2] - pre[2];
+      const x = (P[j] - pre[0]) * ks, y = (P[j + 1] - pre[1]) * ks, z = (P[j + 2] - pre[2]) * ks;
       const X = m0 * x + m1 * y + m2 * z + post[0];
       const Y = m3 * x + m4 * y + m5 * z + post[1];
       const Z = m6 * x + m7 * y + m8 * z + post[2];
@@ -334,12 +387,21 @@
 
   function frame(t) {
     zbuf.fill(0);
-    const rot = t * 0.45 + dragRot;
+    // transformación: el ramo gira rápido y se achica, después crece el frasco
+    let sB = 1, sJ = 0, spin = 0;
+    if (morphT >= 0) {
+      const e = t - morphT;
+      spin = 5 * Math.min(e, 1.4) - 2.5 * Math.max(0, Math.min(e, 1.4) - 0.7) ** 2 / 0.7;
+      if (e < 0.7) sB = 1 - e / 0.7;
+      else { sB = 0; const q = Math.min(1, (e - 0.7) / 0.7); sJ = q < 1 ? q * q * (3 - 2 * q) * (1 + 0.25 * Math.sin(Math.PI * q)) : 1; }
+    }
+    const rot = t * 0.45 + dragRot + spin;
     const tilt = -0.32 + dragTilt;
     const TX = Rx(tilt);
     const fy = 0.15 * Math.sin(t * 0.9);
     const Mb = mul(mul(TX, Rz(0.04 * Math.sin(t * 0.7))), Ry(rot));
-    splat(bouquet, Mb, [0, YC, 0], [0, fy, 0], -1);
+    if (sB > 0) splat(bouquet, Mb, [0, YC, 0], [0, fy, 0], -1, sB);
+    if (sJ > 0) splat(jar, Mb, [0, YC, 0], [0, fy, 0], -1, sJ);
 
     // estrellitas de fondo que titilan
     for (const s of stars) {
@@ -380,7 +442,22 @@
     dragTilt = Math.max(-0.6, Math.min(0.5, dragTilt + dy * 0.004));
     lx = e.clientX; ly = e.clientY;
   });
-  cv.addEventListener('pointerup', () => { if (dragging && moved < 8) nextPalette(); dragging = false; });
+  // secreto: 12 clicks seguidos en la esquina superior izquierda
+  let cornerCount = 0, cornerLast = 0;
+  function handleTap(e) {
+    const r = cv.getBoundingClientRect();
+    const inCorner = e.clientX - r.left < r.width * 0.25 && e.clientY - r.top < r.height * 0.25;
+    if (inCorner && morphT < 0) {
+      const now = performance.now();
+      cornerCount = now - cornerLast < 1500 ? cornerCount + 1 : 1;
+      cornerLast = now;
+      if (cornerCount >= 12) morphT = clock;
+      return;
+    }
+    cornerCount = 0;
+    nextPalette();
+  }
+  cv.addEventListener('pointerup', e => { if (dragging && moved < 8) handleTap(e); dragging = false; });
   cv.addEventListener('pointercancel', () => { dragging = false; });
 
   // ---------- loop ----------
